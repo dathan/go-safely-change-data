@@ -1,3 +1,3 @@
-module github.com/dathan/go-project-template
+module github.com/dathan/go-safely-change-data
 
 go 1.20

@@ -42,7 +42,7 @@ LABEL stage=release
 COPY --from=alpineCerts /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=baseGo /root/gocode/bin /app
 COPY --from=baseGo /root/gocode/scripts /app
-ENTRYPOINT ["/app/go-project-template"]
+ENTRYPOINT ["/app/go-safely-change-data"]
 
 
 #
