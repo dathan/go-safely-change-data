@@ -35,19 +35,19 @@ func main() {
 	defer db.Close()
 
 	// Determine the columns of the composite primary key
-	rows, err := db.Query(`SELECT COLUMN_NAME
+	rowsTableStructure, err := db.Query(`SELECT COLUMN_NAME
                            FROM information_schema.KEY_COLUMN_USAGE
                            WHERE TABLE_NAME = ?
                              AND CONSTRAINT_NAME = 'PRIMARY'`, *tableName)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer rows.Close()
+	defer rowsTableStructure.Close()
 
 	var primaryKeys []string
-	for rows.Next() {
+	for rowsTableStructure.Next() {
 		var key string
-		if err := rows.Scan(&key); err != nil {
+		if err := rowsTableStructure.Scan(&key); err != nil {
 			log.Fatal(err)
 		}
 		primaryKeys = append(primaryKeys, key)
@@ -56,15 +56,14 @@ func main() {
 	// Query all rows needed to delete, use the primary key only because we want to change the data based on the where clause
 	// sql := fmt.Sprintf("SELECT "+strings.Join(primaryKeys, ",")+" FROM %s WHERE %s", *tableName, *whereClause)
 	sql := fmt.Sprintf("SELECT * FROM %s WHERE %s", *tableName, *whereClause)
-
 	// log.Println(sql)
 
 	// the previous rows are closed
-	rows, err = db.Query(sql)
+	rowsStream, err := db.Query(sql)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer rows.Close()
+	defer rowsStream.Close()
 
 	// Prepare the delete statement
 	whereConditions := make([]string, len(primaryKeys))
@@ -84,7 +83,7 @@ func main() {
 	semaphore := make(chan struct{}, *concurrency) // Limit to 5 concurrent deletions
 
 	// Iterate over the rows
-	cols, err := rows.Columns()
+	cols, err := rowsStream.Columns()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -95,8 +94,9 @@ func main() {
 		valuePtrs[i] = &values[i]
 	}
 
-	for rows.Next() {
-		err := rows.Scan(valuePtrs...)
+	// rows.Next is using streaming. So, we are not buffering the entire table locally
+	for rowsStream.Next() {
+		err := rowsStream.Scan(valuePtrs...)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -120,21 +120,24 @@ func main() {
 		// Delete row by composite primary key concurrently
 		wg.Add(1)
 		semaphore <- struct{}{}
-		go func(values []interface{}) {
-			defer wg.Done()
-			_, err := stmt.Exec(values...)
-			if err != nil {
-				log.Fatal(err)
-			}
-			fmt.Printf("Deleted row with %s\n", strings.Join(whereConditions, " AND "))
-			<-semaphore
-		}(primaryKeyValues)
+		go executeDeleteQuery(&wg, semaphore, stmt, primaryKeyValues, whereConditions)
 	}
 
 	wg.Wait()
 
 	// Check for errors from iterating over rows
-	if err := rows.Err(); err != nil {
+	if err := rowsStream.Err(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// run the delete
+func executeDeleteQuery(wg *sync.WaitGroup, semaphore chan struct{}, stmt *sql.Stmt, values []interface{}, whereConditions []string) {
+	defer wg.Done()
+	_, err := stmt.Exec(values...)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Deleted row with %s\n", strings.Join(whereConditions, " AND "))
+	<-semaphore
 }
