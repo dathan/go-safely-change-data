@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/dathan/go-safely-change-data/pkg/utils"
 	_ "github.com/go-sql-driver/mysql"
 )
 
@@ -16,6 +17,9 @@ func main() {
 	dbName := flag.String("db", "yourdb", "Name of the DB")
 	tableName := flag.String("table", "", "Name of the table to delete rows from")
 	whereClause := flag.String("where", "1=1", "WHERE clause to filter rows to delete")
+	concurrency := flag.Int("concurrency", 5, "How many concurrent changes at once")
+	dryRun := flag.Bool("dry_run", true, "Print the changes out")
+
 	flag.Parse()
 
 	if *tableName == "" {
@@ -49,9 +53,13 @@ func main() {
 		primaryKeys = append(primaryKeys, key)
 	}
 
-	// Query all rows needed to delete
+	// Query all rows needed to delete, use the primary key only because we want to change the data based on the where clause
+	// sql := fmt.Sprintf("SELECT "+strings.Join(primaryKeys, ",")+" FROM %s WHERE %s", *tableName, *whereClause)
 	sql := fmt.Sprintf("SELECT * FROM %s WHERE %s", *tableName, *whereClause)
-	log.Println(sql)
+
+	// log.Println(sql)
+
+	// the previous rows are closed
 	rows, err = db.Query(sql)
 	if err != nil {
 		log.Fatal(err)
@@ -63,6 +71,7 @@ func main() {
 	for i, key := range primaryKeys {
 		whereConditions[i] = fmt.Sprintf("%s = ?", key)
 	}
+
 	deleteSQL := fmt.Sprintf("DELETE FROM %s WHERE %s", *tableName, strings.Join(whereConditions, " AND "))
 	stmt, err := db.Prepare(deleteSQL)
 	if err != nil {
@@ -72,13 +81,14 @@ func main() {
 
 	// Concurrency control
 	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, 5) // Limit to 5 concurrent deletions
+	semaphore := make(chan struct{}, *concurrency) // Limit to 5 concurrent deletions
 
 	// Iterate over the rows
 	cols, err := rows.Columns()
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	values := make([]interface{}, len(cols))
 	valuePtrs := make([]interface{}, len(cols))
 	for i := range values {
@@ -100,6 +110,11 @@ func main() {
 					break
 				}
 			}
+		}
+
+		if *dryRun {
+			fmt.Printf("%s;\n", utils.InterpolateQuery(deleteSQL, primaryKeyValues))
+			continue
 		}
 
 		// Delete row by composite primary key concurrently
