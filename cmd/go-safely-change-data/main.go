@@ -88,6 +88,7 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// scan will write to the values array from the valuesPtr
 	values := make([]interface{}, len(cols))
 	valuePtrs := make([]interface{}, len(cols))
 	for i := range values {
@@ -102,16 +103,9 @@ func main() {
 		}
 
 		// Extract primary key values
-		var primaryKeyValues []interface{}
-		for _, key := range primaryKeys {
-			for i, col := range cols {
-				if col == key {
-					primaryKeyValues = append(primaryKeyValues, values[i])
-					break
-				}
-			}
-		}
+		primaryKeyValues := extractPrimaryKeys(cols, primaryKeys, values)
 
+		// printOut what you will do 1st, incase you need to check in the changes into git
 		if *dryRun {
 			fmt.Printf("%s;\n", utils.InterpolateQuery(deleteSQL, primaryKeyValues))
 			continue
@@ -121,7 +115,7 @@ func main() {
 		wg.Add(1)
 		semaphore <- struct{}{}
 		go executeDeleteQuery(&wg, semaphore, stmt, primaryKeyValues, whereConditions)
-	}
+	} // end stream
 
 	wg.Wait()
 
@@ -129,6 +123,20 @@ func main() {
 	if err := rowsStream.Err(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// extract the primary key value from the table structure
+func extractPrimaryKeys(cols, primaryKeys []string, values []interface{}) []interface{} {
+	var primaryKeyValues []interface{}
+	for _, key := range primaryKeys {
+		for i, col := range cols {
+			if col == key {
+				primaryKeyValues = append(primaryKeyValues, values[i])
+				break
+			}
+		}
+	}
+	return primaryKeyValues
 }
 
 // run the delete
